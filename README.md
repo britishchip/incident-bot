@@ -87,13 +87,13 @@ sudo docker save incident-bot:latest | sudo k3s ctr images import -
 Deploy:
 
 ```bash
-sudo KUBECONFIG=/etc/rancher/k3s/k3s.yaml kubectl apply -f deployment.yaml
+sudo kubectl apply -f deployment.yaml
 ```
 
 Get the cluster IP:
 
 ```bash
-sudo KUBECONFIG=/etc/rancher/k3s/k3s.yaml kubectl get svc incident-bot -n monitoring
+sudo kubectl get svc incident-bot -n monitoring
 ```
 
 Point Grafana to it:
