@@ -1,75 +1,121 @@
-# Incident Bot
+# incident-bot
 
-An automated incident response bot that receives alerts from Grafana, logs them as structured incidents, and posts notifications to Slack.
+A webhook receiver that listens for Grafana alerts, assigns severity levels, logs them as structured incidents, and posts colour-coded notifications to Slack.
 
-## Architecture
-Grafana Alert → Incident Bot (/webhook) → Slack #incidents
-↓
-Incident Log (/incidents)
+Built to work alongside [sre-observability](https://github.com/britishchip/sre-observability). When a Grafana alert fires, it hits this bot instead of a generic webhook.
 
-￼
+```
+Grafana alert --> /webhook --> severity classification --> Slack #incidents
+                                      |
+                                 /incidents (audit log)
+```
 
-## Stack
+## How it works
 
-- **Python + Flask** — webhook receiver and incident logger
-- **Slack Incoming Webhooks** — notification delivery
-- **Kubernetes** (k3s) — container orchestration
-- **Docker** — containerization
+Grafana sends a POST request to `/webhook` when an alert fires. The bot reads the alert payload, assigns a severity level based on the alert name, generates a unique incident ID, and posts a colour-coded message to a Slack channel. Every incident is also stored in memory and accessible via `/incidents`.
 
-## Features
+Severity is determined by keywords in the alert name:
 
-- Receives Grafana webhook payloads
-- Auto-generates incident IDs (INC-0001, INC-0002...)
-- Assigns severity levels (P1, P2, P3) based on alert name
-- Posts colour-coded alerts to Slack
-- Exposes `/incidents` endpoint for incident log
-- Environment-based secrets management via `.env`
-
-## Severity Mapping
-
-| Level | Trigger |
-|-------|---------|
-| P1 | Alert name contains "critical" |
-| P2 | Alert name contains "error" or "slo" |
-| P3 | Everything else |
+| Level | Colour | Trigger |
+|-------|--------|---------|
+| P1 | Red | Alert name contains "critical" |
+| P2 | Orange | Alert name contains "error" or "slo" |
+| P3 | Green | Everything else |
 
 ## Endpoints
 
 | Endpoint | Method | Description |
 |----------|--------|-------------|
-| `/webhook` | POST | Receives Grafana alerts |
-| `/incidents` | GET | Lists all logged incidents |
+| `/webhook` | POST | Receives Grafana alert payloads |
+| `/incidents` | GET | Returns all logged incidents as JSON |
 | `/health` | GET | Health check |
 
-## Setup
+## Running locally
+
+Copy the example env file and add your Slack webhook URL:
 
 ```bash
 cp .env.example .env
-# Add your SLACK_WEBHOOK_URL to .env
+```
 
+Install dependencies and start the bot:
+
+```bash
 pip install -r requirements.txt
 python bot.py
 ```
 
-## Deploy to Kubernetes
+The bot runs on port 6000. Test it with a sample alert payload:
 
 ```bash
-kubectl apply -f deployment.yaml
+curl -X POST http://localhost:6000/webhook \
+  -H "Content-Type: application/json" \
+  -d '{
+    "alerts": [
+      {
+        "status": "firing",
+        "labels": {
+          "alertname": "SLO Breach - Success Rate"
+        },
+        "annotations": {
+          "summary": "Success rate dropped below 99%"
+        }
+      }
+    ]
+  }'
 ```
 
-## Environment Variables
+Check the incident was logged:
+
+```bash
+curl http://localhost:6000/incidents
+```
+
+You should see a message in your Slack channel and a JSON response with the incident ID, timestamp, and severity.
+
+## Deploy to Kubernetes
+
+Assumes k3s is running and the bot image has been imported into containerd.
+
+Build and import the image:
+
+```bash
+sudo docker build -t incident-bot:latest .
+sudo docker save incident-bot:latest | sudo k3s ctr images import -
+```
+
+Deploy:
+
+```bash
+sudo KUBECONFIG=/etc/rancher/k3s/k3s.yaml kubectl apply -f deployment.yaml
+```
+
+Get the cluster IP:
+
+```bash
+sudo KUBECONFIG=/etc/rancher/k3s/k3s.yaml kubectl get svc incident-bot -n monitoring
+```
+
+Point Grafana to it:
+
+1. Go to Alerting > Contact points > Add contact point
+2. Type: Webhook
+3. URL: `http://<CLUSTER-IP>:6000/webhook`
+4. Go to Alerting > Notification policies and set it as the default contact point
+
+## Environment variables
 
 | Variable | Description |
 |----------|-------------|
-| `SLACK_WEBHOOK_URL` | Slack incoming webhook URL |
+| `SLACK_WEBHOOK_URL` | Slack incoming webhook URL from api.slack.com |
 
-## Integration
+## Project structure
 
-Designed to work with [sre-observability](https://github.com/britishchip/sre-observability) — point Grafana contact points to `http://<bot-ip>:6000/webhook`.
-
-## Key SRE Concepts Demonstrated
-
-- **Automated incident response** — no manual intervention needed when alerts fire
-- **Incident classification** — structured severity levels
-- **Audit trail** — every incident logged with timestamp and ID
-- **Secrets management** — credentials kept out of source control
+```
+incident-bot/
+  bot.py            Flask app, webhook handler, incident logger
+  requirements.txt
+  Dockerfile
+  deployment.yaml   Kubernetes Deployment and Service
+  .env.example      Environment variable template
+```
